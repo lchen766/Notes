@@ -1,3 +1,14 @@
+# Summary:
+How we scale our system to support millions of users:
+- keep web tier stateless
+- build redundancy at every tier
+- cache data as much as you can
+- support multiple data centers
+- host static assets in CDN
+- scale your data tier by sharding
+- split tiers into individual services
+- monitor your system and use automation tools
+
 # Single Server Setup
 ![Figure 1](../images/1.jpg)
 
@@ -211,4 +222,116 @@ Stateless web tier 指的是：每个 web server 都不保存用户状态（stat
     5. Easier Deployment & Maintenance & Better System Realibility
         - Servers can be restarted, replaced, or updated independently without affecting user sessions.
         - Since state is externalized (e.g., Redis, database, or client-side tokens), the system is more resilient to individual node failures.
-    
+
+# Data Centers
+
+## geoDNS
+- geoDNS is a DNS service that allows domain names to be resolved to IP addresses based on the location of a user.
+    - e.g., in the figure below, in normal operation, users are geoDNS-routed (i.e., geo-routed), to the closest data center.
+![Figure 8](../images/8.jpg)
+- In the event of any significant data center outage, we direct all traffic to a **healthy data center**. 
+    - e.g., data center 2 is offline, and 100% of the traffic is routed to data center 1.
+![Figure 9](../images/9.jpg)
+- **Technical Challenges** must be resolved to achieve multi-data center setup:
+    - 1. **Traffic redirection**
+        - need effective tools to direct traffic to correct data center
+        - GeoDNS can be used to direct traffic to the nearest data center depending where the user is located
+    - 2. **Data Synchronization**
+        - users from different regions could use diffferent local databases or caches.
+        - in failover cases, traffic might be routed to a data center where data is unavailable.
+            - common strategy: replicate data across multiple data centers. 
+    - 3. **Test and deployment**
+        - automated deployment tools are vital to keep services consistent through all the data centers. 
+
+## Message Queue
+- A message queue is a durable component
+    - stored in memory
+    - supports asynchronous communication
+        - serves as a buffer and distributes asynchronous requests
+- **basic architecture**
+    ![Figure 10](../images/10.jpg)
+    - **input service (producers/ publishers)**: create messages, and publish them to a message queue
+    - **consumers/subscribers**: connect to the queue, and perform actions defined by the mssages
+- **decoupling** makes the message queue a preferred architecture for building a scalable and reliable application
+    - the **producer** can post a message to the queue when the **consumer** is unavailable to process it.
+    - the **consumer** can read messages from the queue even wehn the **producer** is unavailable
+
+# Logging, metrics, automation
+| Concept |  |
+| --------| -------- |
+| Logging | 记录发生了什么: the process of recording events that happen in a system |
+| Metrics | 量化系统表现: numerical measurements that describe system performance  |
+| Automation | 自动处理和运维: the use of systems to automatically perform tasks without manual intervention |
+
+## Logging:
+- Monitoring error logs is important 
+    - as it helps to identify errors and problems in the system
+    - can monitor error logs 
+        - (1) **at per server level** or 
+        - (2) use tools to **aggregate them to a centralized service** for easy search and viewing.
+
+## Metrics:
+- Collecting different types of metrics help us to gain business insights and understand the health status of the system.
+- Provide quantitative insights into system performance and are used for monitoring, alerting, and capacity planning
+- Useful metrics:
+    - **1. Host level metrics**: 
+        - CPU, Memory, disk I/O, etc.
+    - **2. Aggregated level metrics**: 
+        - e.g., the performance of the entire database tier, cache tier, etc.
+    - **3. Key busienss metrics**: 
+        - daily active users, retention, revenue, etc.
+
+## Automation
+- When a system gets big and complex, we need to build or leverage automation tools to improve productivity.
+    - continuous integration is a good practice
+        - in which each code check-in is verified through automation, allowing teams to detect problems early.
+    - automating your build, test, deploy process, etc.
+        - could improve developer productivity significantly.
+        - e.g., 
+            - Auto Scaling, 
+                - 流量↑ → 自动加机器
+                - 流量↓ → 自动减少
+            - Self-healing
+                - Server down → 自动重启 / 替换
+            - CI/CD
+                - 代码提交 → 自动测试 → 自动上线
+
+![Figure 10](../images/11.jpg)
+
+# Database Scaling
+![Figure 11](../images/12.jpg)
+## 1. Vertical scaling
+- (scaling up) the scaling by **adding more power (CPU, RAM, DISK, etc.) to an existing machine.
+    - e.g., Amazon Realtion Databse Service (RDS) -> can get a database server with 24 TB of RAM
+- drawbacks:
+    - 1. can add more CPU, RAM, etc. to your database server, but there are **hardware limits**
+        - if have a larger user base, a signle server is not enough
+    - 2. greater risk of single point of failures
+    - 3. the overall cost of vertical scaling is high
+        - powerful servers are much more expensive
+
+## 2. Horizontal scaling: Sharding
+- (Sharding) adding more servers.
+- Sharding separates large database into **smaller, more easily managed parts (called shards)**
+    - Each shard **shares the same schema**, 
+    - but **the actual data on each shard is unique** to the shard.
+### Sharding key
+- Anytime user access data, **a hash function** is used find the corresponding shard.
+- Most important factor to consider when implementing a sharding strategy is **the choice of the sharding key**
+    - **sharding key**: known as a partition key
+        - consists of one or more columns that determine how data is distributed. 
+        - criteria:
+            - 1. to choose a key that can evenly distributed data
+- Challenges:
+    - 1. **Resharding data**
+        - resharding data is needed when:
+            - 1) a signle shard could no longer hold more data due to rapid growth.
+            - 2) certain shards might experience shard exhaustion faster than others due to uneven data distribution
+                - when this happens, it requires updating the sharding function and moving data around
+    - 2. **celebrity problem (hotspot key problem)**
+        - excessive access to a specific shard could cause server overload.
+            - e.g., imagine data for katy perry and lady gaga all end up on the same shard -> for social app, that shard will be overwhelmed with read op.
+        - to solve this, we may need to allocate a shard for each celebrity, and each shard might even require further partition
+    - 3. **Join and de-normalization**
+        - once a database has been sharded across multiple servers, it is hard to perform join operations across database shards.
+            - common workaround: de-normalize the database so that queries can be performed in a signle table. 
